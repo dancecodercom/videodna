@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod download:*)",
+      "Bash(go build:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(brew install:*)",
+      "Bash(./videodna)",
+      "Bash(yt-dlp:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(./videodna:*)",
+      "Bash(ls:*)",
+      "Bash(ffprobe:*)",
+      "Bash(file:*)",
+      "Bash(chmod:*)",
+      "Bash(time ./bin/videodna:*)",
+      "Bash(time ./bin/videodna-arm64:*)",
+      "Bash(time ./bin/videodna-amd64:*)",
+      "Bash(./test_modes.sh:*)",
+      "Bash(./run_modes.sh:*)",
+      "Bash(identify:*)",
+      "Bash(./bin/videodna-arm64:*)"
+    ]
+  }
+}
