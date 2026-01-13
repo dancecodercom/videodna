@@ -1,8 +1,3 @@
 bin/*
 !bin/.gitkeep
-*.mp4
-*.mov
-*.avi
-*.png
-*.jpg
 /tests/
