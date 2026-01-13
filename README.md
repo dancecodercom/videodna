@@ -74,7 +74,26 @@ Options:
 # Resize to specific dimensions
 ./bin/videodna -input video.mp4 -output dna.png -resize 1920x1080
 ```
+## Output
 
+```
+Processing video: 1439 frames, 1280x720 pixels
+Processed 100/1439 frames (472.0 fps, 7% done)
+Processed 200/1439 frames (548.0 fps, 14% done)
+Processed 300/1439 frames (569.8 fps, 21% done)
+Processed 400/1439 frames (590.1 fps, 28% done)
+Processed 500/1439 frames (611.8 fps, 35% done)
+Processed 600/1439 frames (623.5 fps, 42% done)
+Processed 700/1439 frames (633.8 fps, 49% done)
+Processed 800/1439 frames (639.5 fps, 56% done)
+Processed 900/1439 frames (644.0 fps, 63% done)
+Processed 1000/1439 frames (649.6 fps, 69% done)
+Processed 1100/1439 frames (648.7 fps, 76% done)
+Processed 1200/1439 frames (648.4 fps, 83% done)
+Processed 1300/1439 frames (646.8 fps, 90% done)
+Processed 1400/1439 frames (650.5 fps, 97% done)
+Done: 1439 frames in 2.21s (650.7 fps, 599.7 Mpx/s)
+```
 ## Project Structure
 
 ```

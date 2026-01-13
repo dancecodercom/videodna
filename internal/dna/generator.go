@@ -124,6 +124,14 @@ func Generate(inputPath, outputPath, mode string, vertical bool, resize string, 
 		}
 	}
 
+	elapsed := time.Since(startTime).Seconds()
+	if !silent && elapsed > 0 {
+		fps := float64(frameIdx) / elapsed
+		totalPixels := float64(frameIdx) * float64(width) * float64(height)
+		pps := totalPixels / elapsed / 1e6
+		fmt.Printf("Done: %d frames in %.2fs (%.1f fps, %.1f Mpx/s)\n", frameIdx, elapsed, fps, pps)
+	}
+
 	var finalImage image.Image
 	if vertical {
 		finalImage = dnaImage.SubImage(image.Rect(0, 0, width, frameIdx))
