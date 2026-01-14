@@ -1,6 +1,7 @@
-bin/*
 !bin/.gitkeep
-/tests/
-/audiodna
-/videodna
 .DS_Store
+.env
+/audiodna
+/tests/
+/videodna
+bin/*
