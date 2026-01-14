@@ -1,0 +1,28 @@
+# Audio DNA Generator - Lightweight Image (No Stem Separation)
+# For quick waveform visualization without ML dependencies
+#
+# Build:   docker build -f Dockerfile.audiodna-lite -t audiodna-lite .
+# Run:     docker run -v $(pwd):/data audiodna-lite -input /data/song.mp3 -no-stems
+
+FROM golang:1.21-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /build
+COPY go.mod go.sum* ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /audiodna ./cmd/audiodna
+
+# Final minimal image
+FROM alpine:3.19
+
+RUN apk add --no-cache ffmpeg
+
+COPY --from=builder /audiodna /usr/local/bin/audiodna
+
+WORKDIR /data
+
+ENTRYPOINT ["/usr/local/bin/audiodna", "-no-stems"]
+CMD ["--help"]

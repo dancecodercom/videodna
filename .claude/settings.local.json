@@ -19,7 +19,13 @@
       "Bash(./test_modes.sh:*)",
       "Bash(./run_modes.sh:*)",
       "Bash(identify:*)",
-      "Bash(./bin/videodna-arm64:*)"
+      "Bash(./bin/videodna-arm64:*)",
+      "Bash(./bin/audiodna:*)",
+      "Bash(docker build:*)",
+      "Bash(./bin/videodna:*)",
+      "Bash(./process_video.sh:*)",
+      "Bash(sysctl:*)",
+      "Bash(demucs:*)"
     ]
   }
 }

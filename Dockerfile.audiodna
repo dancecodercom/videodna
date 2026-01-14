@@ -1,0 +1,57 @@
+# Audio DNA Generator - Full Docker Image with Demucs
+# Includes all dependencies for stem separation
+#
+# Build:   docker build -f Dockerfile.audiodna -t audiodna .
+# Run:     docker run -v $(pwd):/data audiodna -input /data/song.mp3 -output /data/dna.png
+
+FROM python:3.11-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go
+ENV GO_VERSION=1.21.5
+RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Build audiodna binary
+WORKDIR /build
+COPY go.mod go.sum* ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
+RUN go build -o /audiodna ./cmd/audiodna
+
+# Final image
+FROM python:3.11-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Demucs with pinned stable versions and soundfile backend
+RUN pip install --no-cache-dir "numpy<2" torch==2.1.2 torchaudio==2.1.2 soundfile && \
+    pip install --no-cache-dir demucs
+
+# Pre-download demucs model (htdemucs) to bake into image
+RUN python -c "import torch; torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th', map_location='cpu')"
+
+# Suppress OpenBLAS threading warnings
+ENV OMP_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+
+# Copy binary
+COPY --from=builder /audiodna /usr/local/bin/audiodna
+
+# Create working directory
+WORKDIR /data
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/audiodna"]
+CMD ["--help"]
