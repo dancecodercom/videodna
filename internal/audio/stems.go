@@ -2,12 +2,16 @@
 package audio
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // StemType represents different audio stems.
@@ -153,6 +157,7 @@ func separateWithDemucs(ctx context.Context, inputPath string, config StemConfig
 		"-n", model,
 		"-o", config.OutputDir,
 		"--device", config.Device,
+		"--segment", "7", // Prevent OOM on long files (htdemucs max is 7.8s)
 	}
 
 	// Add two-stems flag for 2-stem separation
@@ -163,9 +168,21 @@ func separateWithDemucs(ctx context.Context, inputPath string, config StemConfig
 	args = append(args, inputPath)
 
 	cmd := exec.CommandContext(ctx, "demucs", args...)
-	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	// Capture stderr to filter progress output
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start demucs: %w", err)
+	}
+
+	// Process stderr in background, showing filtered progress
+	go filterDemucsOutput(stderr)
+
+	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("demucs failed: %w", err)
 	}
 
@@ -175,24 +192,28 @@ func separateWithDemucs(ctx context.Context, inputPath string, config StemConfig
 
 	stems := &StemFiles{}
 
-	// Check for each possible stem file
+	// Check for each possible stem file (try both .wav and .mp3)
 	stemTypes := []struct {
 		name string
 		dest *string
 	}{
-		{"vocals.wav", &stems.Vocals},
-		{"drums.wav", &stems.Drums},
-		{"bass.wav", &stems.Bass},
-		{"other.wav", &stems.Other},
-		{"piano.wav", &stems.Piano},
-		{"guitar.wav", &stems.Guitar},
-		{"no_vocals.wav", &stems.Other}, // For 2-stem mode
+		{"vocals", &stems.Vocals},
+		{"drums", &stems.Drums},
+		{"bass", &stems.Bass},
+		{"other", &stems.Other},
+		{"piano", &stems.Piano},
+		{"guitar", &stems.Guitar},
+		{"no_vocals", &stems.Other}, // For 2-stem mode
 	}
 
 	for _, st := range stemTypes {
-		path := filepath.Join(stemDir, st.name)
-		if _, err := os.Stat(path); err == nil {
-			*st.dest = path
+		// Try wav first, then mp3
+		for _, ext := range []string{".wav", ".mp3"} {
+			path := filepath.Join(stemDir, st.name+ext)
+			if _, err := os.Stat(path); err == nil {
+				*st.dest = path
+				break
+			}
 		}
 	}
 
@@ -271,4 +292,47 @@ func CheckSeparatorAvailable(sep SeparatorType) error {
 		return fmt.Errorf("%s not found in PATH. Install it with: pip install %s", cmd, cmd)
 	}
 	return nil
+}
+
+// filterDemucsOutput reads demucs stderr and shows clean progress
+func filterDemucsOutput(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	// Match progress lines like "100%|██████| 5.85/5.85 [00:03<00:00, 1.91seconds/s]"
+	progressRe := regexp.MustCompile(`(\d+)%\|[^|]*\|\s*([\d.]+)/([\d.]+)\s*\[([^\]]+)\]`)
+	lastPct := -1
+	startTime := time.Now()
+	var lastLine string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip OpenBLAS warnings and empty lines
+		if strings.Contains(line, "OpenBLAS Warning") || strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// Check for progress updates
+		if matches := progressRe.FindStringSubmatch(line); matches != nil {
+			pct := 0
+			fmt.Sscanf(matches[1], "%d", &pct)
+
+			// Only show progress at 10% intervals
+			if pct/10 > lastPct/10 || pct == 100 {
+				elapsed := time.Since(startTime).Seconds()
+				throughput := 0.0
+				if elapsed > 0 {
+					var current float64
+					fmt.Sscanf(matches[2], "%f", &current)
+					throughput = current / elapsed
+				}
+				fmt.Printf("  Stem separation: %3d%% (%.1f sec/s)\n", pct, throughput)
+				lastPct = pct
+			}
+			lastLine = line
+		} else if strings.Contains(line, "Downloading") {
+			// Show download progress
+			fmt.Printf("  Downloading model...\n")
+		}
+	}
+	_ = lastLine // suppress unused warning
 }

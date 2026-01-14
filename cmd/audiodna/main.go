@@ -16,7 +16,7 @@ func main() {
 	// Define flags
 	input := flag.String("input", "", "Input audio file (required)")
 	output := flag.String("output", "audiodna.png", "Output PNG file")
-	width := flag.Int("width", 1920, "Output width in pixels (X = time)")
+	resize := flag.String("resize", "", "Resize output to WxH (e.g., 1920x200)")
 	stemHeight := flag.Int("stem-height", 50, "Height per stem in pixels")
 	stems := flag.Int("stems", 4, "Number of stems: 2, 4, or 6")
 	separator := flag.String("separator", "demucs", "Stem separator: demucs or spleeter")
@@ -107,9 +107,18 @@ Docker:
 		os.Exit(1)
 	}
 
+	// Parse resize option
+	var resizeWidth, resizeHeight int
+	if *resize != "" {
+		if _, err := fmt.Sscanf(*resize, "%dx%d", &resizeWidth, &resizeHeight); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid resize format '%s', use WxH (e.g., 1920x200)\n", *resize)
+			os.Exit(1)
+		}
+	}
+
 	// Build config
 	config := audiodna.DefaultConfig()
-	config.Width = *width
+	config.Width = 0 // Auto-calculate based on duration
 	config.StemHeight = *stemHeight
 	config.StemConfig.NumStems = *stems
 	config.StemConfig.Separator = sep
@@ -122,6 +131,8 @@ Docker:
 	config.Normalize = !*noNormalize
 	config.Timeout = *timeout
 	config.Silent = *silent
+	config.ResizeWidth = resizeWidth
+	config.ResizeHeight = resizeHeight
 
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeout)*time.Second)
@@ -138,8 +149,8 @@ Docker:
 
 	if !*silent {
 		elapsed := time.Since(startTime)
-		fmt.Printf("\nCompleted in %.2fs\n", elapsed.Seconds())
-		fmt.Printf("Duration: %.2fs, Stems: %d\n", result.Duration, len(result.Stems))
-		fmt.Printf("Output: %s (%dx%d)\n", *output, result.Image.Bounds().Dx(), result.Image.Bounds().Dy())
+		bounds := result.Image.Bounds()
+		fmt.Printf("Output: %s (%dx%d, %d stems, %.1fs in %.1fs)\n",
+			*output, bounds.Dx(), bounds.Dy(), len(result.Stems), result.Duration, elapsed.Seconds())
 	}
 }

@@ -35,8 +35,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Demucs (includes torch, torchaudio)
-RUN pip install --no-cache-dir demucs
+# Install Demucs with pinned stable versions and soundfile backend
+RUN pip install --no-cache-dir "numpy<2" torch==2.1.2 torchaudio==2.1.2 soundfile && \
+    pip install --no-cache-dir demucs
+
+# Pre-download demucs model (htdemucs) to bake into image
+RUN python -c "import torch; torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th', map_location='cpu')"
+
+# Suppress OpenBLAS threading warnings
+ENV OMP_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
 
 # Copy binary
 COPY --from=builder /audiodna /usr/local/bin/audiodna

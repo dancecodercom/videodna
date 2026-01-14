@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/pforret/videodna/internal/audio"
@@ -16,35 +17,44 @@ import (
 
 // Config configures DNA generation.
 type Config struct {
-	Width        int                 // Output width in pixels (X = time)
+	Width        int                 // Output width in pixels (0 = auto from duration)
 	Height       int                 // Output height in pixels (auto-calculated if 0)
 	StemConfig   audio.StemConfig    // Stem separation config
 	SkipStems    bool                // If true, use original audio only
 	Normalize    bool                // Normalize volume levels
 	ColorScheme  ColorScheme         // Color scheme for visualization
 	StemHeight   int                 // Height per stem in pixels (default: 50)
-	ShowLabels   bool                // Show stem labels on left side
-	LabelWidth   int                 // Width of label area (default: 60)
+	ShowLabels   bool                // Show stem labels at top
+	LabelHeight  int                 // Height of label area at top (default: 20)
 	Timeout      int                 // Timeout in seconds
 	Silent       bool                // Suppress progress output
+	ResizeWidth  int                 // Final resize width (0 = no resize)
+	ResizeHeight int                 // Final resize height (0 = no resize)
 }
 
 // DefaultConfig returns default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Width:       1920,
-		Height:      0, // Auto-calculate
-		StemConfig:  audio.DefaultStemConfig(),
-		SkipStems:   false,
-		Normalize:   true,
-		ColorScheme: SchemeDefault,
-		StemHeight:  50,
-		ShowLabels:  true,
-		LabelWidth:  60,
-		Timeout:     600, // 10 minutes default for stem separation
-		Silent:      false,
+		Width:        0,    // Auto-calculate from duration
+		Height:       0,    // Auto-calculate from stems
+		StemConfig:   audio.DefaultStemConfig(),
+		SkipStems:    false,
+		Normalize:    true,
+		ColorScheme:  SchemeDefault,
+		StemHeight:   50,
+		ShowLabels:   true,
+		LabelHeight:  20,
+		Timeout:      600, // 10 minutes default for stem separation
+		Silent:       false,
+		ResizeWidth:  0, // No resize by default
+		ResizeHeight: 0,
 	}
 }
+
+const (
+	defaultFPS      = 24  // Assumed FPS for audio files
+	minOutputWidth  = 720 // Minimum output width
+)
 
 // ColorScheme defines how stems are colored.
 type ColorScheme string
@@ -83,19 +93,25 @@ type Result struct {
 
 // Generate creates a DNA visualization from an audio file.
 func Generate(ctx context.Context, inputPath, outputPath string, config Config) (*Result, error) {
-	if !config.Silent {
-		fmt.Printf("Processing: %s\n", inputPath)
-	}
-
 	// Get audio info
 	info, err := audio.GetInfo(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get audio info: %w", err)
 	}
 
+	// Calculate width from duration if not specified
+	// Width = max(720, duration * 24fps)
+	if config.Width == 0 {
+		frames := int(info.Duration * defaultFPS)
+		config.Width = frames
+		if config.Width < minOutputWidth {
+			config.Width = minOutputWidth
+		}
+	}
+
 	if !config.Silent {
-		fmt.Printf("Duration: %.2fs, Sample Rate: %d Hz, Channels: %d\n",
-			info.Duration, info.SampleRate, info.Channels)
+		fmt.Printf("Input: %s (%.1fs, %dHz, %dch, %dpx)\n",
+			inputPath, info.Duration, info.SampleRate, info.Channels, config.Width)
 	}
 
 	var stemFiles *audio.StemFiles
@@ -106,8 +122,7 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 		// Check if separator is available
 		if err := audio.CheckSeparatorAvailable(config.StemConfig.Separator); err != nil {
 			if !config.Silent {
-				fmt.Printf("Warning: %v\n", err)
-				fmt.Println("Falling back to original audio only")
+				fmt.Printf("Warning: %v, using original audio\n", err)
 			}
 			config.SkipStems = true
 		}
@@ -115,8 +130,8 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 
 	if !config.SkipStems {
 		if !config.Silent {
-			fmt.Printf("Separating stems using %s (%d stems)...\n",
-				config.StemConfig.Separator, config.StemConfig.NumStems)
+			fmt.Printf("Separating into %d stems (%s)...\n",
+				config.StemConfig.NumStems, config.StemConfig.Separator)
 		}
 
 		stemFiles, err = audio.SeparateStems(ctx, inputPath, config.StemConfig)
@@ -126,16 +141,16 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 
 		stemPaths = stemFiles.GetStemPaths()
 		stemLabels = stemFiles.GetStemLabels()
-
-		if !config.Silent {
-			fmt.Printf("Separated into %d stems\n", len(stemPaths))
-		}
 	}
 
 	// If no stems, use original audio
 	if len(stemPaths) == 0 {
 		stemPaths = []string{inputPath}
 		stemLabels = []string{"mixed"}
+	}
+
+	if !config.Silent {
+		fmt.Printf("Extracting waveforms: %s\n", strings.Join(stemLabels, ", "))
 	}
 
 	// Process each stem in parallel
@@ -149,10 +164,6 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 		wg.Add(1)
 		go func(idx int, path, label string) {
 			defer wg.Done()
-
-			if !config.Silent {
-				fmt.Printf("Extracting waveform for %s...\n", label)
-			}
 
 			waveform, err := audio.ExtractWaveform(ctx, path, waveformConfig)
 			if err != nil {
@@ -188,34 +199,26 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 		return nil, processErr
 	}
 
-	// Calculate output dimensions
-	outputHeight := config.Height
-	if outputHeight == 0 {
-		outputHeight = len(stemDataList) * config.StemHeight
+	// Calculate waveform dimensions (without labels)
+	waveformHeight := config.Height
+	if waveformHeight == 0 {
+		waveformHeight = len(stemDataList) * config.StemHeight
 	}
+	waveformWidth := config.Width
 
-	outputWidth := config.Width
-	if config.ShowLabels {
-		outputWidth += config.LabelWidth
-	}
-
-	// Create output image
-	img := image.NewRGBA(image.Rect(0, 0, outputWidth, outputHeight))
+	// Create waveform image (without labels)
+	waveformImg := image.NewRGBA(image.Rect(0, 0, waveformWidth, waveformHeight))
 
 	// Fill background
 	bgColor := color.RGBA{R: 20, G: 20, B: 25, A: 255}
-	for y := 0; y < outputHeight; y++ {
-		for x := 0; x < outputWidth; x++ {
-			img.SetRGBA(x, y, bgColor)
+	for y := 0; y < waveformHeight; y++ {
+		for x := 0; x < waveformWidth; x++ {
+			waveformImg.SetRGBA(x, y, bgColor)
 		}
 	}
 
 	// Draw each stem
-	stemPixelHeight := outputHeight / len(stemDataList)
-	xOffset := 0
-	if config.ShowLabels {
-		xOffset = config.LabelWidth
-	}
+	stemPixelHeight := waveformHeight / len(stemDataList)
 
 	for i, stemData := range stemDataList {
 		yStart := i * stemPixelHeight
@@ -223,7 +226,7 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 
 		// Draw waveform
 		for x, seg := range stemData.Segments {
-			if x >= config.Width {
+			if x >= waveformWidth {
 				break
 			}
 
@@ -235,7 +238,6 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 
 			// Draw symmetric waveform
 			halfHeight := barHeight / 2
-			xPos := x + xOffset
 
 			for y := yMid - halfHeight; y <= yMid+halfHeight; y++ {
 				if y >= yStart && y < yStart+stemPixelHeight {
@@ -244,7 +246,7 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 					intensity := 1.0 - float64(dist)/float64(halfHeight+1)*0.3
 
 					c := scaleColor(stemData.Color, intensity)
-					img.SetRGBA(xPos, y, c)
+					waveformImg.SetRGBA(x, y, c)
 				}
 			}
 		}
@@ -253,24 +255,57 @@ func Generate(ctx context.Context, inputPath, outputPath string, config Config) 
 		if i < len(stemDataList)-1 {
 			sepY := yStart + stemPixelHeight - 1
 			sepColor := color.RGBA{R: 50, G: 50, B: 55, A: 255}
-			for x := 0; x < outputWidth; x++ {
-				img.SetRGBA(x, sepY, sepColor)
+			for x := 0; x < waveformWidth; x++ {
+				waveformImg.SetRGBA(x, sepY, sepColor)
 			}
 		}
 	}
 
-	// Draw labels if enabled
+	// Resize waveform if requested (before adding labels)
+	finalWaveform := waveformImg
+	if config.ResizeWidth > 0 && config.ResizeHeight > 0 {
+		finalWaveform = resizeImage(waveformImg, config.ResizeWidth, config.ResizeHeight)
+	}
+
+	// Create final image with labels on top
+	finalWidth := finalWaveform.Bounds().Dx()
+	finalWaveformHeight := finalWaveform.Bounds().Dy()
+	finalHeight := finalWaveformHeight
+	labelOffset := 0
+
 	if config.ShowLabels {
-		drawLabels(img, stemDataList, stemPixelHeight, config.LabelWidth)
+		finalHeight += config.LabelHeight
+		labelOffset = config.LabelHeight
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, finalWidth, finalHeight))
+
+	// Fill label area background
+	if config.ShowLabels {
+		labelBg := color.RGBA{R: 25, G: 25, B: 30, A: 255}
+		for y := 0; y < config.LabelHeight; y++ {
+			for x := 0; x < finalWidth; x++ {
+				img.SetRGBA(x, y, labelBg)
+			}
+		}
+	}
+
+	// Copy waveform to final image
+	for y := 0; y < finalWaveformHeight; y++ {
+		for x := 0; x < finalWidth; x++ {
+			img.SetRGBA(x, y+labelOffset, finalWaveform.RGBAAt(x, y))
+		}
+	}
+
+	// Draw labels at top if enabled
+	if config.ShowLabels {
+		drawLabelsTop(img, stemDataList, config.LabelHeight, finalWidth)
 	}
 
 	// Save output
 	if outputPath != "" {
 		if err := saveImage(img, outputPath); err != nil {
 			return nil, fmt.Errorf("failed to save image: %w", err)
-		}
-		if !config.Silent {
-			fmt.Printf("Saved: %s\n", outputPath)
 		}
 	}
 
@@ -297,118 +332,159 @@ func scaleColor(c color.RGBA, scale float64) color.RGBA {
 	}
 }
 
-func drawLabels(img *image.RGBA, stems []StemData, stemHeight, labelWidth int) {
-	// Simple label drawing using filled rectangles with stem color
-	// For proper text, would need freetype or similar
-	labelBg := color.RGBA{R: 30, G: 30, B: 35, A: 255}
+// resizeImage resizes an image using bilinear interpolation
+func resizeImage(src *image.RGBA, newWidth, newHeight int) *image.RGBA {
+	srcBounds := src.Bounds()
+	srcW := srcBounds.Dx()
+	srcH := srcBounds.Dy()
+
+	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
+
+	xRatio := float64(srcW) / float64(newWidth)
+	yRatio := float64(srcH) / float64(newHeight)
+
+	for y := 0; y < newHeight; y++ {
+		for x := 0; x < newWidth; x++ {
+			// Calculate source coordinates
+			srcX := float64(x) * xRatio
+			srcY := float64(y) * yRatio
+
+			// Get integer and fractional parts
+			x0 := int(srcX)
+			y0 := int(srcY)
+			xFrac := srcX - float64(x0)
+			yFrac := srcY - float64(y0)
+
+			// Clamp to bounds
+			x1 := x0 + 1
+			y1 := y0 + 1
+			if x1 >= srcW {
+				x1 = srcW - 1
+			}
+			if y1 >= srcH {
+				y1 = srcH - 1
+			}
+
+			// Get four neighboring pixels
+			c00 := src.RGBAAt(x0, y0)
+			c10 := src.RGBAAt(x1, y0)
+			c01 := src.RGBAAt(x0, y1)
+			c11 := src.RGBAAt(x1, y1)
+
+			// Bilinear interpolation
+			r := bilinear(float64(c00.R), float64(c10.R), float64(c01.R), float64(c11.R), xFrac, yFrac)
+			g := bilinear(float64(c00.G), float64(c10.G), float64(c01.G), float64(c11.G), xFrac, yFrac)
+			b := bilinear(float64(c00.B), float64(c10.B), float64(c01.B), float64(c11.B), xFrac, yFrac)
+			a := bilinear(float64(c00.A), float64(c10.A), float64(c01.A), float64(c11.A), xFrac, yFrac)
+
+			dst.SetRGBA(x, y, color.RGBA{
+				R: uint8(r),
+				G: uint8(g),
+				B: uint8(b),
+				A: uint8(a),
+			})
+		}
+	}
+
+	return dst
+}
+
+func bilinear(c00, c10, c01, c11, xFrac, yFrac float64) float64 {
+	return c00*(1-xFrac)*(1-yFrac) + c10*xFrac*(1-yFrac) + c01*(1-xFrac)*yFrac + c11*xFrac*yFrac
+}
+
+// stemDisplayNames maps internal stem names to display names
+var stemDisplayNames = map[string]string{
+	"vocals": "vocals",
+	"drums":  "drums",
+	"bass":   "bass",
+	"other":  "other",
+	"piano":  "piano",
+	"guitar": "guitar",
+	"mixed":  "mixed",
+}
+
+// drawLabelsTop draws stem labels horizontally at the top of the image
+func drawLabelsTop(img *image.RGBA, stems []StemData, labelHeight, totalWidth int) {
+	// Calculate spacing for labels
+	numStems := len(stems)
+	if numStems == 0 {
+		return
+	}
+
+	// Draw label bar background
+	labelBg := color.RGBA{R: 25, G: 25, B: 30, A: 255}
+	for y := 0; y < labelHeight; y++ {
+		for x := 0; x < totalWidth; x++ {
+			img.SetRGBA(x, y, labelBg)
+		}
+	}
+
+	// Calculate label positions - evenly spaced
+	labelSpacing := totalWidth / numStems
+	yMid := labelHeight / 2
 
 	for i, stem := range stems {
-		yStart := i * stemHeight
-		yMid := yStart + stemHeight/2
+		xStart := i*labelSpacing + 10
 
-		// Draw label background
-		for y := yStart; y < yStart+stemHeight; y++ {
-			for x := 0; x < labelWidth; x++ {
-				img.SetRGBA(x, y, labelBg)
-			}
-		}
-
-		// Draw color indicator
+		// Draw color indicator square
 		indicatorSize := 8
-		indicatorX := 10
 		for y := yMid - indicatorSize/2; y <= yMid+indicatorSize/2; y++ {
-			for x := indicatorX; x < indicatorX+indicatorSize; x++ {
+			for x := xStart; x < xStart+indicatorSize; x++ {
 				img.SetRGBA(x, y, stem.Color)
 			}
 		}
 
-		// Draw simple letter representation (first letter of label)
-		// This is a basic approach - for real text rendering, use a font library
-		drawLetter(img, stem.Label[0], indicatorX+indicatorSize+6, yMid-4, stem.Color)
+		// Draw label text
+		displayName := stemDisplayNames[stem.Label]
+		if displayName == "" {
+			displayName = stem.Label
+		}
+		drawText(img, displayName, xStart+indicatorSize+4, yMid-3, stem.Color)
 	}
 }
 
-// drawLetter draws a simple 5x7 pixel letter
-func drawLetter(img *image.RGBA, letter byte, x, y int, c color.RGBA) {
-	// Simple 5x7 bitmap font for basic letters
-	letters := map[byte][]string{
-		'v': {
-			"#...#",
-			"#...#",
-			"#...#",
-			".#.#.",
-			".#.#.",
-			"..#..",
-			"..#..",
-		},
-		'd': {
-			"#....",
-			"#....",
-			"#.##.",
-			"##..#",
-			"#...#",
-			"#...#",
-			".###.",
-		},
-		'b': {
-			"#....",
-			"#....",
-			"####.",
-			"#...#",
-			"#...#",
-			"#...#",
-			"####.",
-		},
-		'o': {
-			".....",
-			".....",
-			".###.",
-			"#...#",
-			"#...#",
-			"#...#",
-			".###.",
-		},
-		'p': {
-			".....",
-			".....",
-			"####.",
-			"#...#",
-			"####.",
-			"#....",
-			"#....",
-		},
-		'g': {
-			".....",
-			".....",
-			".####",
-			"#....",
-			"#.###",
-			"#...#",
-			".###.",
-		},
-		'm': {
-			".....",
-			".....",
-			"##.#.",
-			"#.#.#",
-			"#...#",
-			"#...#",
-			"#...#",
-		},
-	}
+// drawText draws text using a simple bitmap font
+func drawText(img *image.RGBA, text string, x, y int, c color.RGBA) {
+	for _, ch := range text {
+		pattern, ok := bitmapFont[byte(ch)]
+		if !ok {
+			x += 6 // space for unknown chars
+			continue
+		}
 
-	pattern, ok := letters[letter]
-	if !ok {
-		return
-	}
-
-	for dy, row := range pattern {
-		for dx, ch := range row {
-			if ch == '#' {
-				img.SetRGBA(x+dx, y+dy, c)
+		for dy, row := range pattern {
+			for dx, pixel := range row {
+				if pixel == '#' {
+					img.SetRGBA(x+dx, y+dy, c)
+				}
 			}
 		}
+		x += len(pattern[0]) + 1 // char width + spacing
 	}
+}
+
+// bitmapFont is a simple 5x7 bitmap font
+var bitmapFont = map[byte][]string{
+	'a': {"..#..", ".#.#.", "#...#", "#####", "#...#", "#...#", "#...#"},
+	'b': {"####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."},
+	'c': {".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."},
+	'd': {"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."},
+	'e': {"#####", "#....", "#....", "####.", "#....", "#....", "#####"},
+	'g': {".###.", "#....", "#....", "#.###", "#...#", "#...#", ".###."},
+	'h': {"#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"},
+	'i': {".###.", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."},
+	'l': {"#....", "#....", "#....", "#....", "#....", "#....", "#####"},
+	'm': {"#...#", "##.##", "#.#.#", "#...#", "#...#", "#...#", "#...#"},
+	'n': {"#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"},
+	'o': {".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."},
+	'p': {"####.", "#...#", "#...#", "####.", "#....", "#....", "#...."},
+	'r': {"####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"},
+	's': {".####", "#....", "#....", ".###.", "....#", "....#", "####."},
+	't': {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."},
+	'u': {"#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."},
+	'v': {"#...#", "#...#", "#...#", "#...#", ".#.#.", ".#.#.", "..#.."},
+	'x': {"#...#", ".#.#.", "..#..", "..#..", "..#..", ".#.#.", "#...#"},
 }
 
 func saveImage(img *image.RGBA, path string) error {

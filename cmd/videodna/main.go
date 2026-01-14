@@ -18,6 +18,8 @@ func main() {
 	resize := flag.String("resize", "", "Resize output: 'WxH' or 'input' for video dimensions")
 	silent := flag.Bool("silent", false, "Suppress stdout output")
 	timeout := flag.Int("timeout", 60, "Timeout in seconds")
+	name := flag.String("name", "", "Display name in legend (default: input filename)")
+	noLegend := flag.Bool("no-legend", false, "Hide top legend bar")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "videodna v%s - Generate DNA fingerprint images from video files\n\n", version)
@@ -34,6 +36,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  videodna -input video.mp4 -output dna.png -mode max\n")
 		fmt.Fprintf(os.Stderr, "  videodna -input video.mp4 -output dna.png -vertical -resize input\n")
 		fmt.Fprintf(os.Stderr, "  videodna -input video.mp4 -output dna.png -resize 1920x1080\n")
+		fmt.Fprintf(os.Stderr, "  videodna -input video.mp4 -output dna.png -name \"My Video\"\n")
 	}
 
 	flag.Parse()
@@ -49,7 +52,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := dna.Generate(*inputFile, *outputFile, *mode, *vertical, *resize, *silent, *timeout); err != nil {
+	legend := dna.DefaultLegendConfig()
+	legend.Enabled = !*noLegend
+	legend.Name = *name
+
+	if err := dna.GenerateWithLegend(*inputFile, *outputFile, *mode, *vertical, *resize, *silent, *timeout, legend); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
