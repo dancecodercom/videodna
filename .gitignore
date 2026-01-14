@@ -3,3 +3,4 @@ bin/*
 /tests/
 /audiodna
 /videodna
+.DS_Store
